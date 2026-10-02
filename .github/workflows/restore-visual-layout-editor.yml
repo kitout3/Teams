@@ -1,0 +1,34 @@
+name: Restore visual layout editor
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[visual-editor-restored]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore visual editor integration
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          css='<link rel="stylesheet" href="assets/editor.css">'
+          if css not in s:
+              s=s.replace('</head>',css+'\n</head>')
+          s=s.replace('<button onclick="openEditor()">Modifier la régie</button>','<button onclick="openLayoutEditor()">Modifier l’habillage</button>')
+          scripts='<script src="assets/layout.js"></script><script src="assets/editor-loader.js"></script>'
+          if 'assets/editor-loader.js' not in s:
+              s=s.replace('</body>',scripts+'\n</body>')
+          p.write_text(s,encoding='utf-8')
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Restore full visual layout editor [visual-editor-restored]"
+          git push
