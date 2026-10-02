@@ -1,0 +1,77 @@
+name: Fix OBS previews and custom logo
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[previews-logo-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch controller and editor
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # ---- index.html: real OBS preview/program screenshots ----
+          p=Path('index.html'); s=p.read_text(encoding='utf-8')
+          s=s.replace('.screen{aspect-ratio:16/9;background:var(--navy);color:#8EA1B4;border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:15px;margin:9px 0}', '.screen{aspect-ratio:16/9;background:var(--navy);color:#8EA1B4;border-radius:6px;display:flex;align-items:center;justify-content:center;text-align:center;padding:0;margin:9px 0;position:relative;overflow:hidden}.screen img{width:100%;height:100%;object-fit:contain;display:block}.screen .screen-placeholder{padding:15px}.hidden{display:none!important}')
+          s=s.replace('<div class="screen" id="previewScreen">Connectez OBS pour préparer une vue.</div>', '<div class="screen" id="previewScreen"><img id="previewImage" class="hidden" alt="Aperçu OBS"><div id="previewPlaceholder" class="screen-placeholder">Connectez OBS pour préparer une vue.</div></div>')
+          s=s.replace('<div class="screen" id="programScreen">La sortie apparaîtra ici.</div>', '<div class="screen" id="programScreen"><img id="programImage" class="hidden" alt="Sortie OBS"><div id="programPlaceholder" class="screen-placeholder">La sortie apparaîtra ici.</div></div>')
+          s=s.replace('let ws,identified=false,demo=false,preview=\'\',program=\'\',virtual=false,id=1,busy=false;', 'let ws,identified=false,demo=false,preview=\'\',program=\'\',virtual=false,id=1,busy=false,thumbBusy=false;')
+          s=s.replace("previewScreen.textContent=demo?'Simulation · '+label(preview):identified?'Vue préparée : '+label(preview):'Connectez OBS pour préparer une vue.';programScreen.textContent=demo?'Simulation · '+label(program):identified?'Sortie active : '+label(program):'La sortie apparaîtra ici.';", "previewPlaceholder.textContent=demo?'Simulation · '+label(preview):identified?'Chargement de l’aperçu…':'Connectez OBS pour préparer une vue.';programPlaceholder.textContent=demo?'Simulation · '+label(program):identified?'Chargement de la sortie…':'La sortie apparaîtra ici.';")
+          s=s.replace("try{ws=new WebSocket('ws://127.0.0.1:4455');", "try{try{ws=new WebSocket('ws://127.0.0.1:4455',{targetAddressSpace:'loopback'})}catch{ws=new WebSocket('ws://127.0.0.1:4455')};")
+          s=s.replace("settings.close();await req('SetStudioModeEnabled',{studioModeEnabled:true});await sync()", "settings.close();await req('SetStudioModeEnabled',{studioModeEnabled:true});await sync();await thumbnails()")
+          s=s.replace("if(m.d.eventType==='CurrentProgramSceneChanged')program=m.d.eventData.sceneName;if(m.d.eventType==='CurrentPreviewSceneChanged')preview=m.d.eventData.sceneName;", "if(m.d.eventType==='CurrentProgramSceneChanged'){program=m.d.eventData.sceneName;setTimeout(thumbnails,100)}if(m.d.eventType==='CurrentPreviewSceneChanged'){preview=m.d.eventData.sceneName;setTimeout(thumbnails,100)}")
+          marker="async function selectScene(n){if(demo){preview=n;return}await req('SetCurrentPreviewScene',{sceneName:n});preview=n}"
+          if marker in s and 'async function thumbnails()' not in s:
+            thumbs="""async function thumbnails(){if(demo||!identified||thumbBusy)return;thumbBusy=true;try{for(const kind of ['preview','program']){const n=kind==='preview'?preview:program;if(!n)continue;try{const r=await req('GetSourceScreenshot',{sourceName:n,imageFormat:'jpeg',imageWidth:640,imageCompressionQuality:70});if(!identified||(kind==='preview'?preview:program)!==n)continue;const im=$(kind+'Image'),ph=$(kind+'Placeholder');im.src=r.imageData;im.classList.remove('hidden');ph.classList.add('hidden')}catch{}}}finally{thumbBusy=false}}\n"""
+            s=s.replace(marker, thumbs+"async function selectScene(n){if(demo){preview=n;previewImage.classList.add('hidden');previewPlaceholder.classList.remove('hidden');return}await req('SetCurrentPreviewScene',{sceneName:n});preview=n;await thumbnails()}")
+          s=s.replace('render();\n</script><script src="assets/layout.js"', "setInterval(thumbnails,1000);render();\n</script><script src=\"assets/layout.js\"")
+          s=s.replace("function toggleDemo(){disconnect();demo=!demo;", "function toggleDemo(){disconnect();previewImage.classList.add('hidden');programImage.classList.add('hidden');previewPlaceholder.classList.remove('hidden');programPlaceholder.classList.remove('hidden');demo=!demo;")
+          p.write_text(s,encoding='utf-8')
+
+          # ---- layout.js: custom image support ----
+          p=Path('assets/layout.js'); s=p.read_text(encoding='utf-8')
+          s=s.replace("brand:'cyrus',bg:'#000D30'", "brand:'cyrus',customSrc:'',bg:'#000D30'")
+          s=s.replace("if(key==='logo')b.brand=logos[a.brand]?a.brand:b.brand;", "if(key==='logo'){b.customSrc=typeof a.customSrc==='string'&&/^data:image\\//.test(a.customSrc)?a.customSrc:'';b.brand=(a.brand==='custom'&&b.customSrc)?'custom':logos[a.brand]?a.brand:b.brand;}")
+          s=s.replace("const im=images&&images[b.brand];", "const im=images&&(b.brand==='custom'?images.custom:images[b.brand]);")
+          p.write_text(s,encoding='utf-8')
+
+          # ---- editor dialog: custom file picker ----
+          p=Path('assets/editor-dialog.html'); s=p.read_text(encoding='utf-8')
+          old='<label class="wide ed-logo-field">Logo<select id="ed-brand"><option value="cyrus">Cyrus</option><option value="herez">Cyrus Herez Wealth Management</option><option value="eternam">Eternam</option></select></label>'
+          new='<label class="wide ed-logo-field">Logo<select id="ed-brand"><option value="cyrus">Cyrus</option><option value="herez">Cyrus Herez Wealth Management</option><option value="eternam">Eternam</option><option value="custom">Fichier personnalisé</option></select></label><label class="wide ed-logo-field">Fichier du logo<input id="ed-logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg"></label><div class="wide ed-logo-field ed-actions"><button type="button" id="ed-logo-clear">Retirer le fichier personnalisé</button><span id="ed-logo-file-name" class="ed-readonly">Aucun fichier personnalisé</span></div>'
+          if old in s: s=s.replace(old,new)
+          p.write_text(s,encoding='utf-8')
+
+          # ---- editor.js: upload, resize, preview and apply custom image ----
+          p=Path('assets/editor.js'); s=p.read_text(encoding='utf-8')
+          anchor="for(const [brand,file] of Object.entries(L.logos)){const im=new Image();im.onload=draw;im.onerror=()=>status('Logo introuvable : vérifiez le dossier assets.');im.src='assets/'+file;images[brand]=im}\n"
+          if anchor in s and 'function syncCustomImage()' not in s:
+            s=s.replace(anchor,anchor+"""function syncCustomImage(){if(draft.logo.customSrc){const im=new Image();im.onload=()=>{images.custom=im;draw()};im.onerror=()=>status('Impossible de lire le logo personnalisé.');im.src=draft.logo.customSrc;images.custom=im;$('ed-logo-file-name').textContent='Logo personnalisé chargé'}else{delete images.custom;$('ed-logo-file-name').textContent='Aucun fichier personnalisé'}}\nasync function fileToLogoData(file){if(!file||!file.type.startsWith('image/'))throw new Error('Choisissez une image PNG, JPG, WebP ou SVG.');if(file.size>8*1024*1024)throw new Error('Le fichier dépasse 8 Mo.');const url=URL.createObjectURL(file);try{const im=new Image();await new Promise((ok,ko)=>{im.onload=ok;im.onerror=()=>ko(new Error('Image illisible.'));im.src=url});const scale=Math.min(1,900/im.naturalWidth,500/im.naturalHeight),c=document.createElement('canvas');c.width=Math.max(1,Math.round(im.naturalWidth*scale));c.height=Math.max(1,Math.round(im.naturalHeight*scale));const x=c.getContext('2d');x.clearRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);return c.toDataURL('image/webp',.9)}finally{URL.revokeObjectURL(url)}}\nsyncCustomImage();\n""")
+          anchor2="$('ed-selected').onchange=()=>{selected=$('ed-selected').value;refresh()};\n"
+          if anchor2 in s and "$('ed-logo-file').onchange" not in s:
+            s=s.replace(anchor2,anchor2+"""$('ed-logo-file').onchange=async()=>{const file=$('ed-logo-file').files[0];if(!file)return;try{draft.logo.customSrc=await fileToLogoData(file);draft.logo.brand='custom';syncCustomImage();dirty();status('Logo personnalisé chargé. Cliquez sur Appliquer au direct pour l’envoyer à OBS.')}catch(e){status(e.message||String(e))}finally{$('ed-logo-file').value=''}};\n$('ed-logo-clear').onclick=()=>{draft.logo.customSrc='';if(draft.logo.brand==='custom')draft.logo.brand='cyrus';syncCustomImage();dirty();status('Logo personnalisé retiré.')};\n$('ed-brand').addEventListener('change',()=>{if($('ed-brand').value==='custom'&&!draft.logo.customSrc)status('Choisissez d’abord un fichier personnalisé.')});\n""")
+          s=s.replace("draft=L.normalize(saved[name]);dirty();", "draft=L.normalize(saved[name]);syncCustomImage();dirty();")
+          s=s.replace("draft=L.preset(b.dataset.preset);dirty()", "draft=L.preset(b.dataset.preset);syncCustomImage();dirty()")
+          s=s.replace("draft=L.defaults();dirty()", "draft=L.defaults();syncCustomImage();dirty()")
+          s=s.replace("draft=L.normalize(applied);dirty()", "draft=L.normalize(applied);syncCustomImage();dirty()")
+          s=s.replace("draft=L.normalize(v.layout);dirty()", "draft=L.normalize(v.layout);syncCustomImage();dirty()")
+          s=s.replace("const sent=L.normalize(draft);applying=true;", "if(draft.logo.visible&&draft.logo.brand==='custom'&&!draft.logo.customSrc){status('Choisissez un fichier pour le logo personnalisé.');return}const sent=L.normalize(draft);applying=true;")
+          p.write_text(s,encoding='utf-8')
+
+          # ---- hosted engine version (also used as reference for local patch) ----
+          Path('overlays').mkdir(exist_ok=True)
+          engine='''<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Cyrus · Habillage</title><style>html,body{margin:0;width:1920px;height:1080px;background:transparent;overflow:hidden}canvas{display:block;width:1920px;height:1080px}</style></head><body><canvas id="graphics" width="1920" height="1080"></canvas><script src="../assets/layout.js"></script><script>const L=CyrusLayout,ctx=document.getElementById('graphics').getContext('2d'),images={};let state=L.defaults();state.logo.visible=false;state.lower.visible=false;try{const v=JSON.parse(localStorage.getItem('cyrus-engine-live'));if(v)state=L.normalize(v)}catch{}function render(){L.draw(ctx,state,images)}function custom(){if(state.logo.customSrc){const i=new Image();i.onload=render;i.src=state.logo.customSrc;images.custom=i}else delete images.custom}function remember(){try{localStorage.setItem('cyrus-engine-live',JSON.stringify(state))}catch{}custom();render()}for(const [k,f] of Object.entries(L.logos)){const i=new Image();i.onload=render;i.src='../assets/'+f;images[k]=i}custom();window.addEventListener('officeLiveControl',e=>{const m=e.detail||{};if(m.type==='layout'){state=L.normalize(m.layout);remember()}else if(m.type==='lower'){for(const k of ['name','role','company'])if(typeof m[k]==='string')state.lower[k]=m[k].slice(0,160);state.lower.visible=!!m.show;remember()}else if(m.type==='logo'){state.logo.visible=!!m.show;remember()}});if(document.fonts)document.fonts.ready.then(render);render();</script></body></html>'''
+          Path('overlays/engine.html').write_text(engine,encoding='utf-8')
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html assets/layout.js assets/editor-dialog.html assets/editor.js overlays/engine.html
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Fix OBS previews and custom logo [previews-logo-fixed]"
+          git push
