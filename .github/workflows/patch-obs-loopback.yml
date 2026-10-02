@@ -1,0 +1,41 @@
+name: Patch OBS local connection
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[obs-loopback-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Chrome local WebSocket connection
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          t = p.read_text(encoding='utf-8')
+          old = "const socket=new WebSocket('ws://127.0.0.1:4455');ws=socket;"
+          new = "let socket;try{socket=new WebSocket('ws://127.0.0.1:4455',{targetAddressSpace:'loopback'})}catch(_){socket=new WebSocket('ws://127.0.0.1:4455')}ws=socket;"
+          if old in t:
+              t = t.replace(old, new, 1)
+          note_old = 'Dans OBS : Outils → Paramètres du serveur WebSocket → activez le serveur sur le port 4455.'
+          note_new = 'Dans OBS : Outils → Paramètres du serveur WebSocket → activez le serveur sur le port 4455. Dans Chrome, autorisez également l’accès au réseau local lorsque la demande apparaît.'
+          if note_old in t:
+              t = t.replace(note_old, note_new, 1)
+          p.write_text(t, encoding='utf-8')
+          PY
+      - name: Commit patch
+        shell: bash
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "Fix Chrome 154 OBS loopback [obs-loopback-patched]"
+          git push
