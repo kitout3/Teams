@@ -1,0 +1,52 @@
+name: Restore regie editor
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[regie-editor-restored]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore editor
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          if 'Modifier la régie' in s:
+              raise SystemExit(0)
+
+          s=s.replace(
+            '<button onclick="settings.showModal()">Connexion & aide</button>',
+            '<button onclick="openEditor()">Modifier la régie</button> <button onclick="settings.showModal()">Connexion & aide</button>'
+          )
+
+          s=s.replace(
+            '.toast.err{background:#a02a24}',
+            '.toast.err{background:#a02a24}.editrow{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}.editrow:last-child{border-bottom:0}.editrow label{font-size:11px;color:var(--muted)}@media(max-width:560px){.editrow{grid-template-columns:1fr}}'
+          )
+
+          marker='<div id="toast" class="toast"></div>'
+          dialog='''<dialog id="editor"><h2>Modifier la régie</h2><p>Renomme les boutons visibles et associe-les aux noms exacts de tes scènes OBS.</p><div id="sceneEdit" style="margin-top:14px"></div><div class="row"><button class="primary" onclick="saveEditor()">Enregistrer</button><button onclick="resetEditor()">Réinitialiser</button><button onclick="editor.close()">Fermer</button></div><p class="help">Ces réglages sont enregistrés uniquement sur cet ordinateur.</p></dialog>\n'''
+          s=s.replace(marker,dialog+marker)
+
+          old="const S=[['00 - ACCUEIL','Accueil','Avant de commencer'],['01 - CAM 1','Caméra 1','Intervenant principal'],['02 - CAM 2','Caméra 2','Second angle'],['03 - DOUBLE CAM','Deux caméras','Deux intervenants'],['04 - PRESENTATION','Présentation','Écran partagé'],['05 - PRESENTATION + CAM','Présentation + caméra','Contenu et intervenant'],['06 - VIDEO','Vidéo','Film de session'],['07 - PAUSE','Pause','Interruption'],['08 - FIN','Fin','Clôture']];"
+          new="const DEFAULT_S=[['00 - ACCUEIL','Accueil','Avant de commencer'],['01 - CAM 1','Caméra 1','Intervenant principal'],['02 - CAM 2','Caméra 2','Second angle'],['03 - DOUBLE CAM','Deux caméras','Deux intervenants'],['04 - PRESENTATION','Présentation','Écran partagé'],['05 - PRESENTATION + CAM','Présentation + caméra','Contenu et intervenant'],['06 - VIDEO','Vidéo','Film de session'],['07 - PAUSE','Pause','Interruption'],['08 - FIN','Fin','Clôture']];let S=(()=>{try{return JSON.parse(localStorage.getItem('regieScenes'))||DEFAULT_S.map(x=>[...x])}catch{return DEFAULT_S.map(x=>[...x])}})();"
+          s=s.replace(old,new)
+
+          funcs='''\nfunction openEditor(){sceneEdit.replaceChildren(...S.map((x,i)=>{const d=document.createElement('div');d.className='editrow';d.innerHTML='<label>Nom affiché<input data-i="'+i+'" data-k="1" value="'+x[1].replace(/&/g,'&amp;').replace(/"/g,'&quot;')+'"></label><label>Nom de scène OBS<input data-i="'+i+'" data-k="0" value="'+x[0].replace(/&/g,'&amp;').replace(/"/g,'&quot;')+'"></label>';return d}));editor.showModal()}\nfunction saveEditor(){document.querySelectorAll('#sceneEdit input').forEach(el=>{const i=+el.dataset.i,k=+el.dataset.k;S[i][k]=el.value.trim()||S[i][k]});localStorage.setItem('regieScenes',JSON.stringify(S));editor.close();render();msg('Configuration de la régie enregistrée.')}\nfunction resetEditor(){if(!confirm('Réinitialiser les noms de vues et de scènes OBS ?'))return;S=DEFAULT_S.map(x=>[...x]);localStorage.removeItem('regieScenes');openEditor();render();msg('Configuration réinitialisée.')}\n'''
+          s=s.replace('\nrender();\n</script>',funcs+'\nrender();\n</script>')
+
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Commit
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "Restore regie editor [regie-editor-restored]"
+          git push
